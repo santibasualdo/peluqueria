@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Turnero - Agenda</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;700;800&family=Inter:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+    rel="stylesheet"
+  />
+
+  <link rel="stylesheet" href="/turnos/styles.css" />
+</head>
+<body>
+  <nav class="topbar">
+    <div class="topbar__brand">
+      <span class="material-symbols-outlined topbar__icon">calendar_today</span>
+      <span class="topbar__title">Turnero Peluqueria</span>
+    </div>
+
+    <div class="topbar__avatar" aria-hidden="true">
+      <span class="material-symbols-outlined">content_cut</span>
+    </div>
+  </nav>
+
+  <div class="topbar-spacer"></div>
+
+  <main class="container">
+    <header class="page-header">
+      <div class="page-header__text">
+        <p class="eyebrow">Agenda del dia</p>
+        <h1 id="page-title">Cargando...</h1>
+        <p class="page-header__hint" id="page-hint">Peluqueria 1</p>
+      </div>
+
+      <div class="date-selector">
+        <button class="icon-button" id="prev-day" type="button" aria-label="Dia anterior">
+          <span class="material-symbols-outlined">chevron_left</span>
+        </button>
+
+        <div class="date-selector__list" id="date-list"></div>
+
+        <button class="icon-button" id="next-day" type="button" aria-label="Dia siguiente">
+          <span class="material-symbols-outlined">chevron_right</span>
+        </button>
+      </div>
+    </header>
+
+    <section class="appointments-section">
+      <div class="section-header">
+        <div>
+          <h2>Turnos del dia</h2>
+          <p class="section-header__subtitle">Altas, edicion y cancelacion desde un solo lugar.</p>
+        </div>
+        <span class="section-header__count" id="turnos-count">0 Total</span>
+      </div>
+
+      <div class="loading-card" id="loading-state">
+        <span class="material-symbols-outlined loading-card__icon">hourglass_top</span>
+        <p>Cargando agenda...</p>
+      </div>
+
+      <div class="error-card hidden" id="error-state">
+        <span class="material-symbols-outlined error-card__icon">warning</span>
+        <p id="error-message">No pudimos cargar los turnos.</p>
+        <button class="btn btn--secondary" id="retry-button" type="button">Reintentar</button>
+      </div>
+
+      <div class="empty-card hidden" id="empty-state">
+        <span class="material-symbols-outlined empty-card__icon">event_busy</span>
+        <h3>Sin turnos para este dia</h3>
+        <p>Cuando reserves o cargues turnos manuales, van a aparecer aca.</p>
+      </div>
+
+      <div id="appointments-list" class="appointments-list"></div>
+    </section>
+  </main>
+
+  <button class="fab" id="new-turno-button" type="button" aria-label="Nuevo turno">
+    <span class="material-symbols-outlined">add</span>
+  </button>
+
+  <footer class="bottom-nav">
+    <button class="bottom-nav__item bottom-nav__item--active" type="button">
+      <span class="material-symbols-outlined bottom-nav__icon bottom-nav__icon--filled">event_note</span>
+      <span class="bottom-nav__label">Turnos</span>
+    </button>
+
+    <button class="bottom-nav__item" type="button" disabled>
+      <span class="material-symbols-outlined bottom-nav__icon">group</span>
+      <span class="bottom-nav__label">Clientes</span>
+    </button>
+
+    <button class="bottom-nav__item" type="button" disabled>
+      <span class="material-symbols-outlined bottom-nav__icon">content_cut</span>
+      <span class="bottom-nav__label">Servicios</span>
+    </button>
+
+    <button class="bottom-nav__item" type="button" disabled>
+      <span class="material-symbols-outlined bottom-nav__icon">settings</span>
+      <span class="bottom-nav__label">Config</span>
+    </button>
+  </footer>
+
+  <div class="modal-shell hidden" id="turno-modal-shell" aria-hidden="true">
+    <div class="modal-backdrop" id="modal-backdrop"></div>
+
+    <section class="turno-modal" role="dialog" aria-modal="true" aria-labelledby="turno-modal-title">
+      <div class="turno-modal__header">
+        <div>
+          <p class="eyebrow">Gestion de turnos</p>
+          <h2 id="turno-modal-title">Nuevo turno</h2>
+          <p class="turno-modal__subtitle" id="turno-modal-subtitle">Completá los datos para reservar.</p>
+        </div>
+
+        <button class="icon-button" id="close-modal-button" type="button" aria-label="Cerrar">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <form class="turno-form" id="turno-form">
+        <div class="field">
+          <label for="cliente-nombre">Nombre del cliente</label>
+          <input id="cliente-nombre" name="clienteNombre" type="text" required />
+        </div>
+
+        <div class="field">
+          <label for="cliente-telefono">Telefono</label>
+          <input id="cliente-telefono" name="clienteTelefono" type="tel" required />
+        </div>
+
+        <div class="field">
+          <label for="peluquero-id">Peluquero</label>
+          <select id="peluquero-id" name="peluqueroId" required></select>
+        </div>
+
+        <div class="field">
+          <label for="servicio-id">Servicio</label>
+          <select id="servicio-id" name="servicioId" required></select>
+        </div>
+
+        <div class="field">
+          <label for="turno-fecha">Fecha</label>
+          <input id="turno-fecha" name="fecha" type="date" required />
+        </div>
+
+        <div class="field">
+          <label for="turno-hora">Hora (24 hs)</label>
+          <input
+            id="turno-hora"
+            name="hora"
+            type="text"
+            inputmode="numeric"
+            placeholder="14:30"
+            maxlength="5"
+            required
+          />
+        </div>
+
+        <div class="field field--full">
+          <label for="cliente-observaciones">Observaciones del cliente</label>
+          <textarea id="cliente-observaciones" name="clienteObservaciones" rows="3"></textarea>
+        </div>
+
+        <div class="field field--full">
+          <label for="turno-observaciones">Observaciones del turno</label>
+          <textarea id="turno-observaciones" name="turnoObservaciones" rows="3"></textarea>
+        </div>
+
+        <p class="turno-form__error hidden" id="form-error"></p>
+
+        <div class="turno-form__actions">
+          <button class="btn btn--secondary" id="cancel-form-button" type="button">Cancelar</button>
+          <button class="btn btn--primary" id="save-turno-button" type="submit">Guardar turno</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <script src="/turnos/app.js"></script>
+</body>
+</html>
