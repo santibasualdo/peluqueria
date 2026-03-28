@@ -16,10 +16,13 @@ import com.santi.turnero.turno.dto.CambiarEstadoTurnoRequest;
 import com.santi.turnero.turno.dto.CancelTurnoRequest;
 import com.santi.turnero.turno.dto.CreateTurnoRequest;
 import com.santi.turnero.turno.dto.ReprogramarTurnoRequest;
+import com.santi.turnero.turno.dto.TurnoInternoResponse;
 import com.santi.turnero.turno.dto.TurnoResponse;
 import com.santi.turnero.turno.dto.UpdateTurnoRequest;
+import com.santi.turnero.turno.mapper.TurnoMapper;
 import com.santi.turnero.turno.repository.TurnoRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -44,6 +47,7 @@ public class TurnoService {
     private final ServicioRepository servicioRepository;
     private final ClienteService clienteService;
     private final AgendaValidationService agendaValidationService;
+    private final TurnoMapper turnoMapper;
 
     @Transactional
     public TurnoResponse crear(CreateTurnoRequest request) {
@@ -72,7 +76,7 @@ public class TurnoService {
                 .observaciones(request.observaciones())
                 .build();
 
-        return toResponse(turnoRepository.save(turno));
+        return savePublic(turno);
     }
 
     @Transactional(readOnly = true)
@@ -86,7 +90,7 @@ public class TurnoService {
                         hasta
                 )
                 .stream()
-                .map(this::toResponse)
+                .map(turnoMapper::toResponse)
                 .toList();
     }
 
@@ -101,7 +105,7 @@ public class TurnoService {
                         hasta
                 )
                 .stream()
-                .map(this::toResponse)
+                .map(turnoMapper::toResponse)
                 .toList();
     }
 
@@ -114,7 +118,15 @@ public class TurnoService {
                         Set.of(TurnoEstado.RESERVADO)
                 )
                 .stream()
-                .map(this::toResponse)
+                .map(turnoMapper::toResponse)
+                .toList();
+    }
+
+    @Transactional(readOnly = true)
+    public List<TurnoInternoResponse> listarPendientesDeRecordatorio(LocalDateTime desde, LocalDateTime hasta) {
+        return turnoRepository.findPendientesDeRecordatorio(desde, hasta)
+                .stream()
+                .map(turnoMapper::toInternalResponse)
                 .toList();
     }
 
@@ -125,7 +137,7 @@ public class TurnoService {
 
         Peluquero peluquero = obtenerPeluquero(request.peluqueroId(), turno.getPeluqueria().getId());
         Servicio servicio = obtenerServicio(request.servicioId(), turno.getPeluqueria().getId());
-        Cliente cliente = clienteService.obtenerOCrear(request.cliente());
+        Cliente cliente = resolveClienteParaEdicion(turno, request);
         LocalDateTime fechaHoraFin = calcularFechaHoraFin(request.fechaHoraInicio(), servicio);
 
         agendaValidationService.validarDisponibilidad(
@@ -143,7 +155,7 @@ public class TurnoService {
         turno.setFechaHoraFin(fechaHoraFin);
         turno.setObservaciones(request.observaciones());
 
-        return toResponse(turnoRepository.save(turno));
+        return savePublic(turno);
     }
 
     @Transactional
@@ -159,7 +171,26 @@ public class TurnoService {
             turno.setObservaciones(request.observaciones().trim());
         }
 
-        return toResponse(turnoRepository.save(turno));
+        return savePublic(turno);
+    }
+
+    @Transactional
+    public TurnoResponse marcarRecordatorioEnviado(Long turnoId) {
+        Turno turno = obtenerTurno(turnoId);
+        turno.setRecordatorioEnviadoAt(LocalDateTime.now());
+        return savePublic(turno);
+    }
+
+    @Transactional
+    public TurnoResponse confirmarAsistencia(Long turnoId) {
+        Turno turno = obtenerTurno(turnoId);
+
+        if (turno.getEstado() != TurnoEstado.RESERVADO) {
+            throw new BusinessException("Solo se puede confirmar asistencia para turnos reservados.");
+        }
+
+        turno.setAsistenciaConfirmadaAt(LocalDateTime.now());
+        return savePublic(turno);
     }
 
     @Transactional
@@ -179,7 +210,7 @@ public class TurnoService {
         );
 
         turno.setEstado(TurnoEstado.RESERVADO);
-        return toResponse(turnoRepository.save(turno));
+        return savePublic(turno);
     }
 
     @Transactional
@@ -214,7 +245,7 @@ public class TurnoService {
             turno.setObservaciones(request.observaciones().trim());
         }
 
-        return toResponse(turnoRepository.save(turno));
+        return savePublic(turno);
     }
 
     @Transactional
@@ -230,7 +261,7 @@ public class TurnoService {
         }
 
         turno.setEstado(request.estado());
-        return toResponse(turnoRepository.save(turno));
+        return savePublic(turno);
     }
 
     private Peluqueria obtenerPeluqueria(Long peluqueriaId) {
@@ -274,27 +305,34 @@ public class TurnoService {
         }
     }
 
+    private Cliente resolveClienteParaEdicion(Turno turno, UpdateTurnoRequest request) {
+        if (request.cliente() == null) {
+            return turno.getCliente();
+        }
+
+        boolean telefonoPresente = request.cliente().telefono() != null && !request.cliente().telefono().isBlank();
+        boolean nombrePresente = request.cliente().nombre() != null && !request.cliente().nombre().isBlank();
+
+        if (!telefonoPresente || !nombrePresente) {
+            return turno.getCliente();
+        }
+
+        return clienteService.obtenerOCrear(new com.santi.turnero.turno.dto.TurnoClienteRequest(
+                request.cliente().nombre(),
+                request.cliente().telefono(),
+                request.cliente().observaciones()
+        ));
+    }
+
     private LocalDateTime calcularFechaHoraFin(LocalDateTime fechaHoraInicio, Servicio servicio) {
         return fechaHoraInicio.plusMinutes(servicio.getDuracionMinutos());
     }
 
-    private TurnoResponse toResponse(Turno turno) {
-        return new TurnoResponse(
-                turno.getId(),
-                turno.getPeluqueria().getId(),
-                turno.getPeluqueria().getNombre(),
-                turno.getPeluquero().getId(),
-                turno.getPeluquero().getNombre(),
-                turno.getCliente().getId(),
-                turno.getCliente().getNombre(),
-                turno.getCliente().getTelefono(),
-                turno.getServicio().getId(),
-                turno.getServicio().getNombre(),
-                turno.getServicio().getDuracionMinutos(),
-                turno.getFechaHoraInicio(),
-                turno.getFechaHoraFin(),
-                turno.getEstado(),
-                turno.getObservaciones()
-        );
+    private TurnoResponse savePublic(Turno turno) {
+        try {
+            return turnoMapper.toResponse(turnoRepository.saveAndFlush(turno));
+        } catch (DataIntegrityViolationException exception) {
+            throw new BusinessException("El peluquero ya tiene un turno asignado en ese horario.");
+        }
     }
 }

@@ -25,8 +25,6 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
 
 @Service
 public class WhatsAppConversationService {
@@ -50,31 +48,36 @@ public class WhatsAppConversationService {
             0. Empezar de nuevo
             """;
 
-    private final ConcurrentMap<String, WhatsAppConversationSession> sessions = new ConcurrentHashMap<>();
     private final ClienteService clienteService;
     private final DisponibilidadService disponibilidadService;
     private final TurnoService turnoService;
+    private final WhatsAppConversationStoreService conversationStoreService;
     private final Long peluqueriaId;
     private final Long peluqueroId;
     private final Long servicioId;
     private final Integer intervaloMinutos;
+    private final Integer inactivityTimeoutMinutes;
 
     public WhatsAppConversationService(
             ClienteService clienteService,
             DisponibilidadService disponibilidadService,
             TurnoService turnoService,
+            WhatsAppConversationStoreService conversationStoreService,
             @Value("${whatsapp.booking.peluqueria-id:1}") Long peluqueriaId,
             @Value("${whatsapp.booking.peluquero-id:1}") Long peluqueroId,
             @Value("${whatsapp.booking.servicio-id:1}") Long servicioId,
-            @Value("${whatsapp.booking.intervalo-minutos:30}") Integer intervaloMinutos
+            @Value("${whatsapp.booking.intervalo-minutos:30}") Integer intervaloMinutos,
+            @Value("${whatsapp.conversation.inactivity-timeout-minutes:30}") Integer inactivityTimeoutMinutes
     ) {
         this.clienteService = clienteService;
         this.disponibilidadService = disponibilidadService;
         this.turnoService = turnoService;
+        this.conversationStoreService = conversationStoreService;
         this.peluqueriaId = peluqueriaId;
         this.peluqueroId = peluqueroId;
         this.servicioId = servicioId;
         this.intervaloMinutos = intervaloMinutos;
+        this.inactivityTimeoutMinutes = inactivityTimeoutMinutes;
     }
 
     public WhatsAppConversationResult procesar(IncomingWhatsAppMessage incomingMessage) {
@@ -82,17 +85,23 @@ public class WhatsAppConversationService {
         String texto = normalize(incomingMessage.texto());
 
         if (telefono == null) {
-            return new WhatsAppConversationResult(null, "No pude identificar el número del remitente.", null);
+            return new WhatsAppConversationResult(null, null, "No pude identificar el número del remitente.", null);
         }
 
         Optional<Cliente> clienteExistente = clienteService.buscarPorTelefono(telefono);
 
         if ("0".equals(texto) || isRestartRequest(texto)) {
-            sessions.remove(telefono);
+            conversationStoreService.findActiveByTelefono(telefono)
+                    .ifPresent(conversationStoreService::finalizeConversation);
             return iniciarFlujo(telefono, clienteExistente);
         }
 
-        WhatsAppConversationSession session = sessions.get(telefono);
+        WhatsAppConversationSession session = conversationStoreService.findActiveByTelefono(telefono).orElse(null);
+        if (session != null && isExpired(session)) {
+            conversationStoreService.finalizeConversation(session);
+            session = null;
+        }
+
         if (session == null) {
             return iniciarFlujo(telefono, clienteExistente);
         }
@@ -105,9 +114,10 @@ public class WhatsAppConversationService {
             case PENDIENTE_ALTERNATIVA_SIN_DISPONIBILIDAD -> manejarAlternativaSinDisponibilidad(session, texto);
             case PENDIENTE_HORARIO -> manejarHorario(session, texto);
             case PENDIENTE_CONFIRMACION -> manejarConfirmacion(session, texto);
+            case PENDIENTE_RESPUESTA_RECORDATORIO -> manejarRespuestaRecordatorio(session, texto);
             case PENDIENTE_CONFIRMACION_CANCELACION -> manejarConfirmacionCancelacion(session, texto);
-            case PENDIENTE_CANCELACION_TURNO -> new WhatsAppConversationResult(
-                    session.getTelefono(),
+            case PENDIENTE_CANCELACION_TURNO -> persistAndRespond(
+                    session,
                     "Volvamos al menú principal.\n\n" + buildMenuPrincipal(session),
                     WhatsAppConversationStep.MENU_PRINCIPAL
             );
@@ -128,8 +138,14 @@ public class WhatsAppConversationService {
                     .step(WhatsAppConversationStep.MENU_PRINCIPAL)
                     .build();
 
-            sessions.put(telefono, session);
-            return new WhatsAppConversationResult(telefono, buildMenuPrincipal(session), session.getStep());
+            WhatsAppConversationSession persisted = conversationStoreService.saveActive(session);
+            persisted.setTurnosParaCancelar(proximosTurnos);
+            return new WhatsAppConversationResult(
+                    persisted.getId(),
+                    telefono,
+                    buildMenuPrincipal(persisted),
+                    persisted.getStep()
+            );
         }
 
         WhatsAppConversationSession session = WhatsAppConversationSession.builder()
@@ -138,17 +154,19 @@ public class WhatsAppConversationService {
                 .step(WhatsAppConversationStep.PENDIENTE_NOMBRE_COMPLETO)
                 .build();
 
-        sessions.put(telefono, session);
+        WhatsAppConversationSession persisted = conversationStoreService.saveActive(session);
         return new WhatsAppConversationResult(
+                persisted.getId(),
                 telefono,
                 "Perfecto. Voy a ayudarte a reservar un turno.\n¿Cuál es tu nombre y apellido?\n\n0. Empezar de nuevo",
-                session.getStep()
+                persisted.getStep()
         );
     }
 
     private WhatsAppConversationResult manejarNombreCompleto(WhatsAppConversationSession session, String texto) {
         if (texto == null || texto.isBlank()) {
             return new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí tu nombre y apellido. Escribilos nuevamente, por favor.\n\n0. Empezar de nuevo",
                     session.getStep()
@@ -159,6 +177,7 @@ public class WhatsAppConversationService {
         String[] partes = nombreCompleto.split(" ", 2);
         if (partes.length < 2) {
             return new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "Necesito que me escribas nombre y apellido para seguir.\n\n0. Empezar de nuevo",
                     session.getStep()
@@ -176,27 +195,23 @@ public class WhatsAppConversationService {
         session.setTurnosParaCancelar(List.of());
         session.setReprogramando(false);
         session.setTurnoSeleccionadoId(null);
-        session.setStep(WhatsAppConversationStep.PENDIENTE_DIA);
 
-        return new WhatsAppConversationResult(
-                session.getTelefono(),
-                "Gracias, " + session.getNombreCompleto() + ".\n" + MENU_DIAS,
-                session.getStep()
-        );
+        return persistAndRespond(session, "Gracias, " + session.getNombreCompleto() + ".\n" + MENU_DIAS, WhatsAppConversationStep.PENDIENTE_DIA);
     }
 
     private WhatsAppConversationResult manejarMenuPrincipal(WhatsAppConversationSession session, String texto) {
+        refreshTurnosParaCancelar(session);
         boolean tieneProximoTurno = session.getTurnosParaCancelar() != null && !session.getTurnosParaCancelar().isEmpty();
 
         if (!tieneProximoTurno) {
             if ("1".equals(texto)) {
                 session.setReprogramando(false);
                 session.setTurnoSeleccionadoId(null);
-                session.setStep(WhatsAppConversationStep.PENDIENTE_DIA);
-                return new WhatsAppConversationResult(session.getTelefono(), MENU_DIAS, session.getStep());
+                return persistAndRespond(session, MENU_DIAS, WhatsAppConversationStep.PENDIENTE_DIA);
             }
 
             return new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\n\n¿Qué querés hacer?\n\n1. Reservar turno\n0. Empezar de nuevo",
                     session.getStep()
@@ -208,37 +223,26 @@ public class WhatsAppConversationService {
             case "1" -> {
                 session.setReprogramando(true);
                 session.setTurnoSeleccionadoId(proximoTurno.id());
-                session.setStep(WhatsAppConversationStep.PENDIENTE_DIA);
-                yield new WhatsAppConversationResult(
-                        session.getTelefono(),
-                        "Perfecto, vamos a modificar tu turno.\n" + MENU_DIAS,
-                        session.getStep()
-                );
+                yield persistAndRespond(session, "Perfecto, vamos a modificar tu turno.\n" + MENU_DIAS, WhatsAppConversationStep.PENDIENTE_DIA);
             }
             case "2" -> {
                 session.setReprogramando(false);
                 session.setTurnoSeleccionadoId(proximoTurno.id());
-                session.setStep(WhatsAppConversationStep.PENDIENTE_CONFIRMACION_CANCELACION);
-                yield new WhatsAppConversationResult(
-                        session.getTelefono(),
-                        "Voy a cancelar tu turno del "
-                                + formatFecha(proximoTurno.fechaHoraInicio())
+                yield persistAndRespond(
+                        session,
+                        "Voy a cancelar tu turno del " + formatFecha(proximoTurno.fechaHoraInicio())
                                 + " a las " + formatHora(proximoTurno.fechaHoraInicio())
                                 + ".\n\n1. Confirmar cancelación\n2. Volver\n0. Empezar de nuevo",
-                        session.getStep()
+                        WhatsAppConversationStep.PENDIENTE_CONFIRMACION_CANCELACION
                 );
             }
             case "3" -> {
                 session.setReprogramando(false);
                 session.setTurnoSeleccionadoId(null);
-                session.setStep(WhatsAppConversationStep.PENDIENTE_DIA);
-                yield new WhatsAppConversationResult(
-                        session.getTelefono(),
-                        "Perfecto, busquemos un nuevo turno.\n" + MENU_DIAS,
-                        session.getStep()
-                );
+                yield persistAndRespond(session, "Perfecto, busquemos un nuevo turno.\n" + MENU_DIAS, WhatsAppConversationStep.PENDIENTE_DIA);
             }
             default -> new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\n\n" + buildMenuPrincipalOptions(session),
                     session.getStep()
@@ -256,6 +260,7 @@ public class WhatsAppConversationService {
 
         if (dia == null) {
             return new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\nRespondé con:\n1. Hoy\n2. Mañana\n3. Pasado mañana\n0. Empezar de nuevo",
                     session.getStep()
@@ -266,9 +271,8 @@ public class WhatsAppConversationService {
         session.setFechaSeleccionada(resolveFecha(texto));
         session.setHorariosOfrecidos(null);
         session.setHorarioSeleccionado(null);
-        session.setStep(WhatsAppConversationStep.PENDIENTE_FRANJA);
 
-        return new WhatsAppConversationResult(session.getTelefono(), "Bien.\n" + MENU_FRANJAS, session.getStep());
+        return persistAndRespond(session, "Bien.\n" + MENU_FRANJAS, WhatsAppConversationStep.PENDIENTE_FRANJA);
     }
 
     private WhatsAppConversationResult manejarFranja(WhatsAppConversationSession session, String texto) {
@@ -280,6 +284,7 @@ public class WhatsAppConversationService {
 
         if (franja == null) {
             return new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\nRespondé con:\n1. Mañana\n2. Tarde\n0. Empezar de nuevo",
                     session.getStep()
@@ -300,11 +305,11 @@ public class WhatsAppConversationService {
             case "2" -> {
                 session.setHorariosOfrecidos(null);
                 session.setHorarioSeleccionado(null);
-                session.setStep(WhatsAppConversationStep.PENDIENTE_DIA);
-                yield new WhatsAppConversationResult(session.getTelefono(), "Perfecto, elijamos otro día.\n" + MENU_DIAS, session.getStep());
+                yield persistAndRespond(session, "Perfecto, elijamos otro día.\n" + MENU_DIAS, WhatsAppConversationStep.PENDIENTE_DIA);
             }
-            case "3" -> cancelarConversacion(session, "Perfecto, cancelé esta solicitud. Si querés arrancar de nuevo, mandame cualquier mensaje.");
+            case "3" -> finalizeAndRespond(session, "Perfecto, cancelé esta solicitud. Si querés arrancar de nuevo, mandame cualquier mensaje.");
             default -> new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\nRespondé con:\n1. Ver " + franjaAlternativa(session.getFranjaSeleccionada()).toLowerCase()
                             + "\n2. Elegir otro día\n3. Cancelar\n0. Empezar de nuevo",
@@ -314,47 +319,83 @@ public class WhatsAppConversationService {
     }
 
     private WhatsAppConversationResult manejarHorario(WhatsAppConversationSession session, String texto) {
-        List<LocalDateTime> horarios = session.getHorariosOfrecidos();
-        if (horarios == null || horarios.isEmpty()) {
-            session.setStep(WhatsAppConversationStep.PENDIENTE_FRANJA);
-            return new WhatsAppConversationResult(
-                    session.getTelefono(),
-                    "No encontré horarios cargados para esta conversación. Volvamos a elegir la franja.\n" + MENU_FRANJAS,
-                    session.getStep()
+        List<LocalDateTime> horarios = consultarHorariosDisponibles(session.getFechaSeleccionada(), session.getFranjaSeleccionada());
+        session.setHorariosOfrecidos(horarios);
+
+        if (horarios.isEmpty()) {
+            return persistAndRespond(
+                    session,
+                    "No tengo horarios disponibles para " + session.getDiaSeleccionado().toLowerCase()
+                            + " por la " + session.getFranjaSeleccionada().toLowerCase()
+                            + ".\n\n1. Ver " + franjaAlternativa(session.getFranjaSeleccionada()).toLowerCase()
+                            + "\n2. Elegir otro día\n3. Cancelar\n0. Empezar de nuevo",
+                    WhatsAppConversationStep.PENDIENTE_ALTERNATIVA_SIN_DISPONIBILIDAD
             );
         }
 
         Integer indice = parsePositiveInteger(texto);
         if (indice == null || indice < 1 || indice > horarios.size()) {
             return new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
-                    "No entendí la opción.\nRespondé con el número del horario que querés elegir.\n\n0. Empezar de nuevo",
+                    "No entendí la opción.\nRespondé con el número del horario que querés elegir.\n\n"
+                            + buildHorariosMenu(horarios) + "\n\n0. Empezar de nuevo",
                     session.getStep()
             );
         }
 
-        LocalDateTime horarioSeleccionado = horarios.get(indice - 1);
-        session.setHorarioSeleccionado(horarioSeleccionado);
-        session.setStep(WhatsAppConversationStep.PENDIENTE_CONFIRMACION);
-
-        return new WhatsAppConversationResult(
-                session.getTelefono(),
+        session.setHorarioSeleccionado(horarios.get(indice - 1));
+        return persistAndRespond(
+                session,
                 "Perfecto.\nVoy a " + (session.isReprogramando() ? "modificar" : "reservar") + " un turno para "
                         + session.getDiaSeleccionado().toLowerCase()
-                        + " a las " + formatHora(horarioSeleccionado)
+                        + " a las " + formatHora(session.getHorarioSeleccionado())
                         + " a nombre de " + session.getNombreCompleto()
                         + ".\n\n1. Confirmar\n2. Cancelar\n0. Empezar de nuevo",
-                session.getStep()
+                WhatsAppConversationStep.PENDIENTE_CONFIRMACION
         );
     }
 
     private WhatsAppConversationResult manejarConfirmacion(WhatsAppConversationSession session, String texto) {
         return switch (texto) {
             case "1" -> confirmarReserva(session);
-            case "2" -> cancelarConversacion(session, "Perfecto, cancelé esta solicitud. Si querés arrancar de nuevo, mandame cualquier mensaje.");
+            case "2" -> finalizeAndRespond(session, "Perfecto, cancelé esta solicitud. Si querés arrancar de nuevo, mandame cualquier mensaje.");
             default -> new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\nRespondé con:\n1. Confirmar\n2. Cancelar\n0. Empezar de nuevo",
+                    session.getStep()
+            );
+        };
+    }
+
+    private WhatsAppConversationResult manejarRespuestaRecordatorio(WhatsAppConversationSession session, String texto) {
+        return switch (texto) {
+            case "1" -> {
+                turnoService.confirmarAsistencia(session.getTurnoSeleccionadoId());
+                yield finalizeAndRespond(session, "Perfecto, te esperamos. Tu asistencia quedó confirmada.");
+            }
+            case "2" -> {
+                session.setReprogramando(true);
+                session.setDiaSeleccionado(null);
+                session.setFranjaSeleccionada(null);
+                session.setFechaSeleccionada(null);
+                session.setHorariosOfrecidos(null);
+                session.setHorarioSeleccionado(null);
+                yield persistAndRespond(
+                        session,
+                        "Perfecto, vamos a reprogramar tu turno.\n" + MENU_DIAS,
+                        WhatsAppConversationStep.PENDIENTE_DIA
+                );
+            }
+            case "3" -> {
+                turnoService.cancelar(session.getTurnoSeleccionadoId(), null);
+                yield finalizeAndRespond(session, "Listo, cancelé tu turno correctamente.");
+            }
+            default -> new WhatsAppConversationResult(
+                    session.getId(),
+                    session.getTelefono(),
+                    "No entendí la opción.\nRespondé con:\n1. Sí, voy a ir\n2. Reprogramar turno\n3. Cancelar turno\n0. Empezar de nuevo",
                     session.getStep()
             );
         };
@@ -364,11 +405,11 @@ public class WhatsAppConversationService {
         return switch (texto) {
             case "1" -> confirmarCancelacion(session);
             case "2" -> {
-                session.setTurnoSeleccionadoId(null);
-                session.setStep(WhatsAppConversationStep.MENU_PRINCIPAL);
-                yield new WhatsAppConversationResult(session.getTelefono(), buildMenuPrincipal(session), session.getStep());
+                refreshTurnosParaCancelar(session);
+                yield persistAndRespond(session, buildMenuPrincipal(session), WhatsAppConversationStep.MENU_PRINCIPAL);
             }
             default -> new WhatsAppConversationResult(
+                    session.getId(),
                     session.getTelefono(),
                     "No entendí la opción.\nRespondé con:\n1. Confirmar cancelación\n2. Volver\n0. Empezar de nuevo",
                     session.getStep()
@@ -378,36 +419,29 @@ public class WhatsAppConversationService {
 
     private WhatsAppConversationResult ofrecerHorarios(WhatsAppConversationSession session, String franja) {
         List<LocalDateTime> horarios = consultarHorariosDisponibles(session.getFechaSeleccionada(), franja);
+        session.setHorariosOfrecidos(horarios);
 
         if (horarios.isEmpty()) {
-            session.setHorariosOfrecidos(null);
-            session.setHorarioSeleccionado(null);
-            session.setStep(WhatsAppConversationStep.PENDIENTE_ALTERNATIVA_SIN_DISPONIBILIDAD);
-
-            return new WhatsAppConversationResult(
-                    session.getTelefono(),
+            return persistAndRespond(
+                    session,
                     "No tengo horarios disponibles para "
                             + session.getDiaSeleccionado().toLowerCase()
                             + " por la " + franja.toLowerCase()
                             + ".\n\n1. Ver " + franjaAlternativa(franja).toLowerCase()
                             + "\n2. Elegir otro día\n3. Cancelar\n0. Empezar de nuevo",
-                    session.getStep()
+                    WhatsAppConversationStep.PENDIENTE_ALTERNATIVA_SIN_DISPONIBILIDAD
             );
         }
 
-        session.setHorariosOfrecidos(horarios);
-        session.setHorarioSeleccionado(null);
-        session.setStep(WhatsAppConversationStep.PENDIENTE_HORARIO);
-
-        return new WhatsAppConversationResult(
-                session.getTelefono(),
+        return persistAndRespond(
+                session,
                 "Tengo estos horarios disponibles para "
                         + session.getDiaSeleccionado().toLowerCase()
                         + " por la " + franja.toLowerCase()
                         + ":\n\n"
                         + buildHorariosMenu(horarios)
                         + "\n\nRespondé con el número de opción.\n\n0. Empezar de nuevo",
-                session.getStep()
+                WhatsAppConversationStep.PENDIENTE_HORARIO
         );
     }
 
@@ -440,11 +474,10 @@ public class WhatsAppConversationService {
 
     private WhatsAppConversationResult confirmarReserva(WhatsAppConversationSession session) {
         if (session.getHorarioSeleccionado() == null) {
-            session.setStep(WhatsAppConversationStep.PENDIENTE_HORARIO);
-            return new WhatsAppConversationResult(
-                    session.getTelefono(),
+            return persistAndRespond(
+                    session,
                     "No encontré el horario seleccionado. Volvamos a elegir una opción.\n\n0. Empezar de nuevo",
-                    session.getStep()
+                    WhatsAppConversationStep.PENDIENTE_HORARIO
             );
         }
 
@@ -471,13 +504,11 @@ public class WhatsAppConversationService {
                 ));
             }
 
-            sessions.remove(session.getTelefono());
-            return new WhatsAppConversationResult(
-                    session.getTelefono(),
+            return finalizeAndRespond(
+                    session,
                     "Listo, tu turno fue " + (session.isReprogramando() ? "modificado" : "reservado")
                             + " para " + session.getDiaSeleccionado().toLowerCase()
-                            + " a las " + formatHora(turno.fechaHoraInicio()) + ".",
-                    null
+                            + " a las " + formatHora(turno.fechaHoraInicio()) + "."
             );
         } catch (BusinessException exception) {
             return manejarHorarioOcupado(session);
@@ -486,13 +517,12 @@ public class WhatsAppConversationService {
 
     private WhatsAppConversationResult confirmarCancelacion(WhatsAppConversationSession session) {
         if (session.getTurnoSeleccionadoId() == null) {
-            session.setStep(WhatsAppConversationStep.MENU_PRINCIPAL);
-            return new WhatsAppConversationResult(session.getTelefono(), buildMenuPrincipal(session), session.getStep());
+            refreshTurnosParaCancelar(session);
+            return persistAndRespond(session, buildMenuPrincipal(session), WhatsAppConversationStep.MENU_PRINCIPAL);
         }
 
         turnoService.cancelar(session.getTurnoSeleccionadoId(), null);
-        sessions.remove(session.getTelefono());
-        return new WhatsAppConversationResult(session.getTelefono(), "Listo, cancelé tu turno correctamente.", null);
+        return finalizeAndRespond(session, "Listo, cancelé tu turno correctamente.");
     }
 
     private WhatsAppConversationResult manejarHorarioOcupado(WhatsAppConversationSession session) {
@@ -500,41 +530,56 @@ public class WhatsAppConversationService {
                 session.getFechaSeleccionada(),
                 session.getFranjaSeleccionada()
         );
+        session.setHorariosOfrecidos(horariosActualizados);
 
         if (horariosActualizados.isEmpty()) {
-            session.setHorariosOfrecidos(null);
-            session.setHorarioSeleccionado(null);
-            session.setStep(WhatsAppConversationStep.PENDIENTE_ALTERNATIVA_SIN_DISPONIBILIDAD);
-            return new WhatsAppConversationResult(
-                    session.getTelefono(),
+            return persistAndRespond(
+                    session,
                     "Ese horario acaba de ocuparse y ya no quedan opciones para "
                             + session.getDiaSeleccionado().toLowerCase()
                             + " por la " + session.getFranjaSeleccionada().toLowerCase()
                             + ".\n\n1. Ver " + franjaAlternativa(session.getFranjaSeleccionada()).toLowerCase()
                             + "\n2. Elegir otro día\n3. Cancelar\n0. Empezar de nuevo",
-                    session.getStep()
+                    WhatsAppConversationStep.PENDIENTE_ALTERNATIVA_SIN_DISPONIBILIDAD
             );
         }
 
-        session.setHorariosOfrecidos(horariosActualizados);
-        session.setHorarioSeleccionado(null);
-        session.setStep(WhatsAppConversationStep.PENDIENTE_HORARIO);
-
-        return new WhatsAppConversationResult(
-                session.getTelefono(),
+        return persistAndRespond(
+                session,
                 "Ese horario acaba de ocuparse.\nTe muestro opciones actualizadas para "
                         + session.getDiaSeleccionado().toLowerCase()
                         + " por la " + session.getFranjaSeleccionada().toLowerCase()
                         + ":\n\n"
                         + buildHorariosMenu(horariosActualizados)
                         + "\n\nRespondé con el número de opción.\n\n0. Empezar de nuevo",
-                session.getStep()
+                WhatsAppConversationStep.PENDIENTE_HORARIO
         );
     }
 
-    private WhatsAppConversationResult cancelarConversacion(WhatsAppConversationSession session, String mensaje) {
-        sessions.remove(session.getTelefono());
-        return new WhatsAppConversationResult(session.getTelefono(), mensaje, null);
+    private void refreshTurnosParaCancelar(WhatsAppConversationSession session) {
+        if (session.getClienteId() == null) {
+            session.setTurnosParaCancelar(List.of());
+            return;
+        }
+
+        session.setTurnosParaCancelar(turnoService.listarProximosDelCliente(peluqueriaId, session.getClienteId()));
+    }
+
+    private WhatsAppConversationResult persistAndRespond(
+            WhatsAppConversationSession session,
+            String mensaje,
+            WhatsAppConversationStep nextStep
+    ) {
+        session.setStep(nextStep);
+        WhatsAppConversationSession persisted = conversationStoreService.saveActive(session);
+        persisted.setHorariosOfrecidos(session.getHorariosOfrecidos());
+        persisted.setTurnosParaCancelar(session.getTurnosParaCancelar());
+        return new WhatsAppConversationResult(persisted.getId(), persisted.getTelefono(), mensaje, persisted.getStep());
+    }
+
+    private WhatsAppConversationResult finalizeAndRespond(WhatsAppConversationSession session, String mensaje) {
+        Long conversationId = conversationStoreService.finalizeConversation(session);
+        return new WhatsAppConversationResult(conversationId, session.getTelefono(), mensaje, null);
     }
 
     private String buildMenuPrincipal(WhatsAppConversationSession session) {
@@ -625,6 +670,14 @@ public class WhatsAppConversationService {
         return normalized.contains("empezar de nuevo")
                 || normalized.contains("reiniciar")
                 || normalized.contains("arrancar de nuevo");
+    }
+
+    private boolean isExpired(WhatsAppConversationSession session) {
+        if (session.getLastInteractionAt() == null || inactivityTimeoutMinutes == null || inactivityTimeoutMinutes <= 0) {
+            return false;
+        }
+
+        return session.getLastInteractionAt().plusMinutes(inactivityTimeoutMinutes).isBefore(LocalDateTime.now());
     }
 
     private String normalize(String value) {

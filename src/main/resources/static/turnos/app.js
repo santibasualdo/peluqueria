@@ -28,6 +28,7 @@ const elements = {
   prevDay: document.getElementById("prev-day"),
   nextDay: document.getElementById("next-day"),
   newTurnoButton: document.getElementById("new-turno-button"),
+  newPeluqueroButton: document.getElementById("new-peluquero-button"),
   modalShell: document.getElementById("turno-modal-shell"),
   modalBackdrop: document.getElementById("modal-backdrop"),
   closeModalButton: document.getElementById("close-modal-button"),
@@ -45,6 +46,16 @@ const elements = {
   servicioId: document.getElementById("servicio-id"),
   turnoFecha: document.getElementById("turno-fecha"),
   turnoHora: document.getElementById("turno-hora"),
+  peluqueroModalShell: document.getElementById("peluquero-modal-shell"),
+  peluqueroModalBackdrop: document.getElementById("peluquero-modal-backdrop"),
+  closePeluqueroModalButton: document.getElementById("close-peluquero-modal-button"),
+  cancelPeluqueroFormButton: document.getElementById("cancel-peluquero-form-button"),
+  peluqueroForm: document.getElementById("peluquero-form"),
+  savePeluqueroButton: document.getElementById("save-peluquero-button"),
+  peluqueroFormError: document.getElementById("peluquero-form-error"),
+  peluqueroNombre: document.getElementById("peluquero-nombre"),
+  peluqueroTelefono: document.getElementById("peluquero-telefono"),
+  peluqueroPassword: document.getElementById("peluquero-password"),
 };
 
 document.addEventListener("DOMContentLoaded", async () => {
@@ -59,11 +70,16 @@ function bindEvents() {
   elements.nextDay.addEventListener("click", () => moveSelectedDate(1));
   elements.retryButton.addEventListener("click", () => loadTurnos());
   elements.newTurnoButton.addEventListener("click", () => openCreateModal());
+  elements.newPeluqueroButton.addEventListener("click", openPeluqueroModal);
   elements.closeModalButton.addEventListener("click", closeModal);
   elements.cancelFormButton.addEventListener("click", closeModal);
   elements.modalBackdrop.addEventListener("click", closeModal);
   elements.form.addEventListener("submit", handleTurnoSubmit);
   elements.turnoHora.addEventListener("input", handleHoraInput);
+  elements.closePeluqueroModalButton.addEventListener("click", closePeluqueroModal);
+  elements.cancelPeluqueroFormButton.addEventListener("click", closePeluqueroModal);
+  elements.peluqueroModalBackdrop.addEventListener("click", closePeluqueroModal);
+  elements.peluqueroForm.addEventListener("submit", handlePeluqueroSubmit);
 }
 
 async function bootstrap() {
@@ -141,9 +157,7 @@ async function handleTurnoSubmit(event) {
 
     const response = await fetch(url, {
       method,
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: buildJsonHeaders(),
       body: JSON.stringify(payload),
     });
 
@@ -164,6 +178,37 @@ async function handleTurnoSubmit(event) {
   }
 }
 
+async function handlePeluqueroSubmit(event) {
+  event.preventDefault();
+  hidePeluqueroFormError();
+  setPeluqueroSaving(true);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/peluqueros`, {
+      method: "POST",
+      headers: buildJsonHeaders(),
+      body: JSON.stringify({
+        nombre: elements.peluqueroNombre.value.trim(),
+        telefono: elements.peluqueroTelefono.value.trim(),
+        password: elements.peluqueroPassword.value,
+        peluqueriaId: state.peluqueriaId,
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(await extractErrorMessage(response));
+    }
+
+    await loadCatalogos();
+    closePeluqueroModal();
+    window.alert("Peluquero creado. El usuario de ingreso es su telefono en numeros.");
+  } catch (error) {
+    showPeluqueroFormError(error.message || "No pudimos crear el peluquero.");
+  } finally {
+    setPeluqueroSaving(false);
+  }
+}
+
 async function cancelTurno(turnoId) {
   const confirmed = window.confirm("¿Querés cancelar este turno?");
   if (!confirmed) {
@@ -173,9 +218,7 @@ async function cancelTurno(turnoId) {
   try {
     const response = await fetch(`${API_BASE_URL}/turnos/${turnoId}/cancelar`, {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers: buildJsonHeaders(),
       body: JSON.stringify({
         observaciones: "Cancelado desde la agenda web",
       }),
@@ -200,6 +243,7 @@ async function reactivarTurno(turnoId) {
   try {
     const response = await fetch(`${API_BASE_URL}/turnos/${turnoId}/reactivar`, {
       method: "PATCH",
+      headers: buildJsonHeaders(),
     });
 
     if (!response.ok) {
@@ -220,6 +264,7 @@ function openCreateModal() {
   elements.modalTitle.textContent = "Nuevo turno";
   elements.modalSubtitle.textContent = "Completá los datos para reservar un turno manualmente.";
   elements.saveTurnoButton.textContent = "Guardar turno";
+  elements.clienteTelefono.placeholder = "";
   elements.turnoFecha.value = formatDateForApi(state.selectedDate);
   elements.turnoHora.value = suggestTime();
 
@@ -246,10 +291,11 @@ function openEditModal(turnoId) {
   resetForm();
 
   elements.modalTitle.textContent = "Editar turno";
-  elements.modalSubtitle.textContent = `Modificá la reserva de ${turno.clienteNombre}.`;
+  elements.modalSubtitle.textContent = `Modificá la reserva de ${turno.clienteNombre}. Si no querés cambiar el telefono, dejalo vacio.`;
   elements.saveTurnoButton.textContent = "Guardar cambios";
   elements.clienteNombre.value = turno.clienteNombre ?? "";
-  elements.clienteTelefono.value = turno.clienteTelefono ?? "";
+  elements.clienteTelefono.value = "";
+  elements.clienteTelefono.placeholder = "Solo cargalo si querés reemplazar el telefono";
   elements.clienteObservaciones.value = "";
   elements.turnoObservaciones.value = turno.observaciones ?? "";
   elements.peluqueroId.value = String(turno.peluqueroId);
@@ -258,6 +304,14 @@ function openEditModal(turnoId) {
   elements.turnoHora.value = formatTimeForInput(turno.fechaHoraInicio);
 
   showModal();
+}
+
+function openPeluqueroModal() {
+  elements.peluqueroForm.reset();
+  hidePeluqueroFormError();
+  setPeluqueroSaving(false);
+  elements.peluqueroModalShell.classList.remove("hidden");
+  elements.peluqueroModalShell.setAttribute("aria-hidden", "false");
 }
 
 function renderHeader() {
@@ -295,6 +349,8 @@ function renderDateSelector() {
       await loadTurnos();
     });
   });
+
+  centerActiveDatePill();
 }
 
 function renderTurnos() {
@@ -338,7 +394,7 @@ function renderTurnos() {
           </span>
           <span class="meta-item">
             <span class="material-symbols-outlined meta-item__icon">call</span>
-            ${escapeHtml(turno.clienteTelefono)}
+            ${escapeHtml(turno.clienteTelefonoMascarado ?? "Telefono protegido")}
           </span>
         </div>
 
@@ -461,6 +517,11 @@ function setFormSaving(isSaving) {
       : "Guardar turno";
 }
 
+function setPeluqueroSaving(isSaving) {
+  elements.savePeluqueroButton.disabled = isSaving;
+  elements.savePeluqueroButton.textContent = isSaving ? "Guardando..." : "Guardar peluquero";
+}
+
 function showError(message) {
   elements.errorMessage.textContent = message;
   elements.errorState.classList.remove("hidden");
@@ -476,9 +537,19 @@ function showFormError(message) {
   elements.formError.classList.remove("hidden");
 }
 
+function showPeluqueroFormError(message) {
+  elements.peluqueroFormError.textContent = message;
+  elements.peluqueroFormError.classList.remove("hidden");
+}
+
 function hideFormError() {
   elements.formError.classList.add("hidden");
   elements.formError.textContent = "";
+}
+
+function hidePeluqueroFormError() {
+  elements.peluqueroFormError.classList.add("hidden");
+  elements.peluqueroFormError.textContent = "";
 }
 
 function showModal() {
@@ -490,6 +561,13 @@ function closeModal() {
   elements.modalShell.classList.add("hidden");
   elements.modalShell.setAttribute("aria-hidden", "true");
   resetForm();
+}
+
+function closePeluqueroModal() {
+  elements.peluqueroModalShell.classList.add("hidden");
+  elements.peluqueroModalShell.setAttribute("aria-hidden", "true");
+  elements.peluqueroForm.reset();
+  hidePeluqueroFormError();
 }
 
 function resetForm() {
@@ -591,6 +669,32 @@ function normalizeNullableString(value) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function buildJsonHeaders() {
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  const csrfToken = getCookie("XSRF-TOKEN");
+  if (csrfToken) {
+    headers["X-XSRF-TOKEN"] = decodeURIComponent(csrfToken);
+  }
+
+  return headers;
+}
+
+function getCookie(name) {
+  const cookies = document.cookie ? document.cookie.split("; ") : [];
+  const prefix = `${name}=`;
+
+  for (const cookie of cookies) {
+    if (cookie.startsWith(prefix)) {
+      return cookie.slice(prefix.length);
+    }
+  }
+
+  return null;
+}
+
 function formatStatus(status) {
   return status
     .toLowerCase()
@@ -637,4 +741,21 @@ function handleHoraInput(event) {
   }
 
   event.target.value = `${digits.slice(0, 2)}:${digits.slice(2)}`;
+}
+
+function centerActiveDatePill() {
+  const activePill = elements.dateList.querySelector(".date-pill--active");
+  if (!activePill) {
+    return;
+  }
+
+  elements.dateList.scrollLeft = 0;
+
+  requestAnimationFrame(() => {
+    activePill.scrollIntoView({
+      inline: "center",
+      block: "nearest",
+      behavior: "auto",
+    });
+  });
 }

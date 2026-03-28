@@ -64,4 +64,10 @@ public class Turno {
 
     @Column(length = 500)
     private String observaciones;
+
+    @Column(name = "recordatorio_enviado_at")
+    private LocalDateTime recordatorioEnviadoAt;
+
+    @Column(name = "asistencia_confirmada_at")
+    private LocalDateTime asistenciaConfirmadaAt;
 }

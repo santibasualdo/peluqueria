@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Primer acceso | Turnero Peluqueria</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Manrope:wght@700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/primer-acceso/primer-acceso.css">
+</head>
+<body>
+<main class="password-layout">
+    <section class="password-card">
+        <div class="password-mark" aria-hidden="true">✂</div>
+        <p class="password-eyebrow">Primer acceso</p>
+        <h1>Cambia tu contrasena</h1>
+        <p class="password-intro">
+            Antes de entrar al panel, necesitamos que definas una contrasena nueva para esta cuenta.
+        </p>
+
+        <p class="password-feedback hidden" id="password-feedback"></p>
+
+        <form class="password-form" id="password-form">
+            <label class="password-field">
+                <span>Nueva contrasena</span>
+                <input id="new-password" type="password" minlength="6" required autocomplete="new-password">
+            </label>
+
+            <label class="password-field">
+                <span>Confirmar contrasena</span>
+                <input id="confirm-password" type="password" minlength="6" required autocomplete="new-password">
+            </label>
+
+            <button class="password-submit" id="password-submit" type="submit">
+                Guardar y entrar
+            </button>
+        </form>
+    </section>
+</main>
+
+<script src="/primer-acceso/primer-acceso.js" defer></script>
+</body>
+</html>

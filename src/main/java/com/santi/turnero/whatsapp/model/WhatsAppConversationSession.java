@@ -14,6 +14,7 @@ import com.santi.turnero.turno.dto.TurnoResponse;
 @Builder
 public class WhatsAppConversationSession {
 
+    private Long id;
     private String telefono;
     private Long clienteId;
     private String nombre;
@@ -23,6 +24,7 @@ public class WhatsAppConversationSession {
     private LocalDate fechaSeleccionada;
     private List<LocalDateTime> horariosOfrecidos;
     private LocalDateTime horarioSeleccionado;
+    private LocalDateTime lastInteractionAt;
     private List<TurnoResponse> turnosParaCancelar;
     private Long turnoSeleccionadoId;
     private boolean reprogramando;

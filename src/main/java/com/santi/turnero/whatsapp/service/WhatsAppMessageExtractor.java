@@ -36,12 +36,13 @@ public class WhatsAppMessageExtractor {
                         continue;
                     }
 
+                    String messageId = message.id();
                     String telefono = message.from();
                     String texto = message.text() != null ? message.text().body() : null;
                     String nombreContacto = resolveContactName(change, telefono);
 
-                    if (telefono != null || texto != null || nombreContacto != null) {
-                        result.add(new IncomingWhatsAppMessage(telefono, texto, nombreContacto));
+                    if (messageId != null || telefono != null || texto != null || nombreContacto != null) {
+                        result.add(new IncomingWhatsAppMessage(messageId, telefono, texto, nombreContacto));
                     }
                 }
             }

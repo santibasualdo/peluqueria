@@ -12,7 +12,7 @@ public record TurnoResponse(
         String peluqueroNombre,
         Long clienteId,
         String clienteNombre,
-        String clienteTelefono,
+        String clienteTelefonoMascarado,
         Long servicioId,
         String servicioNombre,
         Integer servicioDuracionMinutos,

@@ -30,6 +30,11 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, exception.getMessage(), List.of());
     }
 
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<ApiError> handleIllegalArgument(IllegalArgumentException exception) {
+        return buildResponse(HttpStatus.BAD_REQUEST, exception.getMessage(), List.of());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ApiError> handleValidation(MethodArgumentNotValidException exception) {
         List<String> details = exception.getBindingResult()
@@ -54,7 +59,7 @@ public class GlobalExceptionHandler {
         return buildResponse(
                 HttpStatus.INTERNAL_SERVER_ERROR,
                 "Ocurrio un error inesperado en el servidor.",
-                List.of(exception.getClass().getSimpleName())
+                List.of()
         );
     }
 

@@ -10,7 +10,7 @@ import java.time.LocalDateTime;
 public record UpdateTurnoRequest(
         @NotNull Long peluqueroId,
         @NotNull Long servicioId,
-        @NotNull @Valid TurnoClienteRequest cliente,
+        @Valid TurnoClienteUpdateRequest cliente,
         @NotNull @FutureOrPresent LocalDateTime fechaHoraInicio,
         @Size(max = 500) String observaciones
 ) {

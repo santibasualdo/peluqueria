@@ -25,9 +25,10 @@
       <span class="topbar__title">Turnero Peluqueria</span>
     </div>
 
-    <div class="topbar__avatar" aria-hidden="true">
-      <span class="material-symbols-outlined">content_cut</span>
-    </div>
+    <button class="topbar__action" id="new-peluquero-button" type="button">
+      <span class="material-symbols-outlined">person_add</span>
+      <span>Nuevo peluquero</span>
+    </button>
   </nav>
 
   <div class="topbar-spacer"></div>
@@ -179,6 +180,49 @@
         <div class="turno-form__actions">
           <button class="btn btn--secondary" id="cancel-form-button" type="button">Cancelar</button>
           <button class="btn btn--primary" id="save-turno-button" type="submit">Guardar turno</button>
+        </div>
+      </form>
+    </section>
+  </div>
+
+  <div class="modal-shell hidden" id="peluquero-modal-shell" aria-hidden="true">
+    <div class="modal-backdrop" id="peluquero-modal-backdrop"></div>
+
+    <section class="turno-modal turno-modal--compact" role="dialog" aria-modal="true" aria-labelledby="peluquero-modal-title">
+      <div class="turno-modal__header">
+        <div>
+          <p class="eyebrow">Equipo</p>
+          <h2 id="peluquero-modal-title">Nuevo peluquero</h2>
+          <p class="turno-modal__subtitle">El usuario sera el telefono en numeros y vos definis la contrasena inicial.</p>
+        </div>
+
+        <button class="icon-button" id="close-peluquero-modal-button" type="button" aria-label="Cerrar">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+
+      <form class="turno-form" id="peluquero-form">
+        <div class="field field--full">
+          <label for="peluquero-nombre">Nombre</label>
+          <input id="peluquero-nombre" name="nombre" type="text" required />
+        </div>
+
+        <div class="field field--full">
+          <label for="peluquero-telefono">Telefono</label>
+          <input id="peluquero-telefono" name="telefono" type="tel" required />
+        </div>
+
+        <div class="field field--full">
+          <label for="peluquero-password">Contrasena inicial</label>
+          <input id="peluquero-password" name="password" type="password" minlength="6" required />
+        </div>
+
+        <p class="turno-form__hint field--full">El usuario de ingreso sera el telefono del peluquero, solo con numeros.</p>
+        <p class="turno-form__error hidden" id="peluquero-form-error"></p>
+
+        <div class="turno-form__actions">
+          <button class="btn btn--secondary" id="cancel-peluquero-form-button" type="button">Cancelar</button>
+          <button class="btn btn--primary" id="save-peluquero-button" type="submit">Guardar peluquero</button>
         </div>
       </form>
     </section>

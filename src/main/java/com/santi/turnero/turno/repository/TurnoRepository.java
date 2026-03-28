@@ -92,4 +92,20 @@ public interface TurnoRepository extends JpaRepository<Turno, Long> {
             @Param("desde") LocalDateTime desde,
             @Param("estados") Collection<TurnoEstado> estados
     );
+
+    @Query("""
+            select t
+            from Turno t
+            join fetch t.cliente c
+            join fetch t.peluqueria p
+            where t.estado = com.santi.turnero.turno.domain.TurnoEstado.RESERVADO
+              and t.recordatorioEnviadoAt is null
+              and t.fechaHoraInicio >= :desde
+              and t.fechaHoraInicio <= :hasta
+            order by t.fechaHoraInicio asc
+            """)
+    List<Turno> findPendientesDeRecordatorio(
+            @Param("desde") LocalDateTime desde,
+            @Param("hasta") LocalDateTime hasta
+    );
 }

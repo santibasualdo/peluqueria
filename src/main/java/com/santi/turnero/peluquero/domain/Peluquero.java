@@ -39,6 +39,20 @@ public class Peluquero {
     @Column(nullable = false, length = 30)
     private String telefono;
 
+    @Column(nullable = false, length = 40, unique = true)
+    private String usuario;
+
+    @Column(name = "password_hash", nullable = false, length = 255)
+    private String passwordHash;
+
+    @Builder.Default
+    @Column(nullable = false)
+    private boolean activo = true;
+
+    @Builder.Default
+    @Column(name = "requiere_cambio_password", nullable = false)
+    private boolean requiereCambioPassword = false;
+
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "peluqueria_id", nullable = false)
     private Peluqueria peluqueria;
